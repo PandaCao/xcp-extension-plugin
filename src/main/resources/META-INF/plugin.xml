@@ -32,6 +32,8 @@
                   implementationClass="org.dotykacka.xcp.XcpFileType"
                   fieldName="INSTANCE"
                   extensions="xcp"/>
+        <lang.parserDefinition language="XCP"
+                               implementationClass="org.dotykacka.xcp.XcpParserDefinition"/>
         <lang.syntaxHighlighterFactory language="XCP"
                                        implementationClass="org.dotykacka.xcp.XcpSyntaxHighlighterFactory"/>
         <lang.commenter language="XCP"
@@ -40,8 +42,17 @@
                            implementationClass="org.dotykacka.xcp.XcpBraceMatcher"/>
         <annotator language="XCP"
                    implementationClass="org.dotykacka.xcp.XcpAnnotator"/>
+        <localInspection language="XCP"
+                         shortName="XcpSchema"
+                         displayName="1CLICK XCP schema validation"
+                         groupName="1CLICK XCP"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         implementationClass="org.dotykacka.xcp.XcpInspection"/>
         <completion.contributor language="XCP"
                                 implementationClass="org.dotykacka.xcp.XcpCompletionContributor"/>
+        <psi.referenceContributor language="XCP"
+                                  implementationClass="org.dotykacka.xcp.XcpReferenceContributor"/>
     </extensions>
 
 </idea-plugin>

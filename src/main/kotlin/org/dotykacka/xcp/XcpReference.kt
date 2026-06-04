@@ -16,7 +16,7 @@ object XcpReference {
         "calendar_type", "cancel_step", "cc", "changed", "client_contact", "clone", "closed", "code",
         "color", "comment", "condition", "constant_symbol", "contact", "context", "cont", "created",
         "created_by", "create_dt", "creator", "criteria", "currency", "date", "date_from", "date_to",
-        "deadline", "default", "def_id", "def_version", "description", "display", "display_column", "display_name",
+        "deadline", "default", "default_value", "def_id", "def_version", "description", "display", "display_column", "display_name",
         "doctype", "document", "documents", "due_date", "email", "enabled", "end", "eq",
         "error_message", "errors_handled", "event", "event_id", "evrecords", "extras", "fields",
         "folder_path", "folders", "format", "form", "from", "full_def_id", "ge", "hidden", "hint",
