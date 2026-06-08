@@ -8,7 +8,7 @@
     <name>1CLICK XCP Support</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor>Dotykacka</vendor>
+    <vendor email="ducanh.cao@dotykacka.cz" url="https://dotykacka.cz">Dotykacka</vendor>
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
