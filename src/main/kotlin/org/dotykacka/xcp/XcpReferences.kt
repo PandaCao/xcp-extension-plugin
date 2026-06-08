@@ -17,9 +17,7 @@ class XcpReferenceContributor : PsiReferenceContributor() {
             PlatformPatterns.psiElement(),
             object : PsiReferenceProvider() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
-                    if (element.node?.elementType != XcpTokenTypes.STRING) return PsiReference.EMPTY_ARRAY
-                    val reference = XcpReferenceFactory.create(element) ?: return PsiReference.EMPTY_ARRAY
-                    return arrayOf(reference)
+                    return XcpReferenceFactory.createAll(element)
                 }
             }
         )
@@ -28,10 +26,11 @@ class XcpReferenceContributor : PsiReferenceContributor() {
 
 object XcpReferenceFactory {
     fun create(element: PsiElement): PsiReference? {
-        val stringElement = element.takeIf { it.node?.elementType == XcpTokenTypes.STRING }
-            ?: element.parent?.takeIf { it.node?.elementType == XcpTokenTypes.STRING }
-            ?: return null
-        return XcpPsiReference.create(stringElement)
+        return createAll(element).firstOrNull()
+    }
+
+    fun createAll(element: PsiElement): Array<PsiReference> {
+        return XcpPsiReference.createAll(element)
     }
 }
 
@@ -47,6 +46,7 @@ private class XcpPsiReference(
         val target = when (kind) {
             XcpReferenceKind.VARIABLE -> declarations.variableDeclarations[targetName]
             XcpReferenceKind.PHASE -> declarations.phaseDeclarations[targetName]
+            XcpReferenceKind.FUNCTION -> declarations.functionDeclarations[targetName]
         } ?: return null
 
         return file.findElementAt(target.start)
@@ -55,72 +55,216 @@ private class XcpPsiReference(
     override fun getVariants(): Array<Any> = emptyArray()
 
     companion object {
-        fun create(element: PsiElement): XcpPsiReference? {
-            val file = element.containingFile ?: return null
+        fun createAll(element: PsiElement): Array<PsiReference> {
+            val file = element.containingFile ?: return PsiReference.EMPTY_ARRAY
             val structure = XcpStructure.from(file.text)
             val absoluteStart = element.textRange.startOffset
-            val token = structure.tokens.firstOrNull { it.start == absoluteStart && it.type == XcpTokenTypes.STRING } ?: return null
-            val usage = structure.referenceUsageFor(token) ?: return null
-            val rangeInElement = TextRange(
-                usage.range.startOffset - absoluteStart,
-                usage.range.endOffset - absoluteStart
-            )
-            return XcpPsiReference(element, rangeInElement, usage.name, usage.kind)
+            val token = structure.tokens.firstOrNull { it.start == absoluteStart } ?: return PsiReference.EMPTY_ARRAY
+            return structure.referenceUsagesFor(token).map { usage ->
+                val rangeInElement = TextRange(
+                    usage.range.startOffset - absoluteStart,
+                    usage.range.endOffset - absoluteStart
+                )
+                XcpPsiReference(element, rangeInElement, usage.name, usage.kind)
+            }.toTypedArray()
         }
     }
 }
 
-private enum class XcpReferenceKind {
+enum class XcpReferenceKind {
     VARIABLE,
-    PHASE
+    PHASE,
+    FUNCTION
 }
 
-private data class XcpReferenceUsage(
+data class XcpReferenceUsage(
     val kind: XcpReferenceKind,
     val name: String,
     val range: TextRange
 )
 
-private data class XcpDeclaration(
+data class XcpDeclaration(
     val name: String,
     val start: Int,
     val end: Int
 )
 
-private data class XcpStructure(
+data class XcpStructure(
     val text: String,
     val tokens: List<XcpTokenInfo>,
     val variableDeclarations: Map<String, XcpDeclaration>,
-    val phaseDeclarations: Map<String, XcpDeclaration>
+    val phaseDeclarations: Map<String, XcpDeclaration>,
+    val functionDeclarations: Map<String, XcpDeclaration>
 ) {
-    fun referenceUsageFor(token: XcpTokenInfo): XcpReferenceUsage? {
+    fun referenceUsages(): List<XcpReferenceUsage> {
+        return tokens.mapIndexed { i, token -> referenceUsagesFor(token, i) }.flatten()
+    }
+
+    fun referenceUsagesFor(token: XcpTokenInfo): List<XcpReferenceUsage> {
         val tokenIndex = tokens.indexOfFirst { it.start == token.start && it.end == token.end }
-        if (tokenIndex == -1 || isVariableDeclaration(tokenIndex) || isPhaseDeclaration(tokenIndex)) return null
+        if (tokenIndex == -1) return emptyList()
+        return referenceUsagesFor(token, tokenIndex)
+    }
+
+    fun referenceUsageFor(token: XcpTokenInfo): XcpReferenceUsage? {
+        return referenceUsagesFor(token).firstOrNull()
+    }
+
+    fun declarationUsageFor(token: XcpTokenInfo): XcpReferenceUsage? {
+        val tokenIndex = tokens.indexOfFirst { it.start == token.start && it.end == token.end }
+        if (tokenIndex == -1) return null
+
+        if (token.type == XcpTokenTypes.JS_FUNCTION_DECLARATION) {
+            return XcpReferenceUsage(
+                XcpReferenceKind.FUNCTION,
+                token.unquotedText(text),
+                token.contentRange()
+            )
+        }
+
+        val previousKey = previousKeyName(tokenIndex)
+        if (previousKey != "id") return null
+
+        return when {
+            isDeclarationInTopLevelArray(tokenIndex, "variables") -> XcpReferenceUsage(
+                XcpReferenceKind.VARIABLE,
+                token.unquotedText(text),
+                token.contentRange()
+            )
+            isDeclarationInTopLevelArray(tokenIndex, "phases") -> XcpReferenceUsage(
+                XcpReferenceKind.PHASE,
+                token.unquotedText(text),
+                token.contentRange()
+            )
+            else -> null
+        }
+    }
+
+    fun usageTargetFor(token: XcpTokenInfo): XcpReferenceUsage? {
+        return declarationUsageFor(token) ?: referenceUsageFor(token)
+    }
+
+    private fun referenceUsagesFor(token: XcpTokenInfo, tokenIndex: Int): List<XcpReferenceUsage> {
+        if (isVariableDeclaration(tokenIndex) || isPhaseDeclaration(tokenIndex) || isFunctionDeclaration(tokenIndex)) return emptyList()
+
+        val jsStringUsages = jsPropertyStringUsages(token, tokenIndex)
+        if (jsStringUsages.isNotEmpty()) return jsStringUsages
+
+        val jsTokenUsage = jsTokenUsage(token)
+        if (jsTokenUsage != null) return listOf(jsTokenUsage)
 
         val itemUsage = formItemVariableUsage(token, tokenIndex)
-        if (itemUsage != null) return itemUsage
+        if (itemUsage != null) return listOf(itemUsage)
 
         if (isInsideTopLevelArray(tokenIndex, "table_view")) {
-            return stringUsage(token, XcpReferenceKind.VARIABLE)
+            return listOf(stringUsage(token, XcpReferenceKind.VARIABLE))
         }
 
         val previousKey = previousKeyName(tokenIndex)
         if (previousKey == "start_phase" || previousKey == "target" || previousKey == "transitions") {
-            return stringUsage(token, XcpReferenceKind.PHASE)
+            return listOf(stringUsage(token, XcpReferenceKind.PHASE))
+        }
+        if (previousKey == "var") {
+            return listOf(stringUsage(token, XcpReferenceKind.VARIABLE))
+        }
+        if (isSetVariablesInputKey(tokenIndex)) {
+            return listOf(
+                XcpReferenceUsage(
+                    XcpReferenceKind.VARIABLE,
+                    token.unquotedText(text),
+                    token.contentRange()
+                )
+            )
         }
 
-        return null
+        return emptyList()
+    }
+
+    private fun jsTokenUsage(token: XcpTokenInfo): XcpReferenceUsage? {
+        return when (token.type) {
+            XcpTokenTypes.JS_FUNCTION_CALL -> XcpReferenceUsage(
+                XcpReferenceKind.FUNCTION,
+                token.unquotedText(text),
+                token.contentRange()
+            )
+            XcpTokenTypes.JS_IDENTIFIER -> {
+                val name = token.unquotedText(text)
+                if (name in variableDeclarations) {
+                    XcpReferenceUsage(XcpReferenceKind.VARIABLE, name, token.contentRange())
+                } else {
+                    null
+                }
+            }
+            else -> null
+        }
+    }
+
+    private fun jsPropertyStringUsages(token: XcpTokenInfo, tokenIndex: Int): List<XcpReferenceUsage> {
+        if (token.type != XcpTokenTypes.STRING || previousKeyName(tokenIndex) != "js") return emptyList()
+        return scanJsExpressionReferences(token)
+    }
+
+    private fun scanJsExpressionReferences(token: XcpTokenInfo): List<XcpReferenceUsage> {
+        val contentStart = token.start + 1
+        val contentEnd = token.end - 1
+        if (contentStart >= contentEnd) return emptyList()
+
+        val result = mutableListOf<XcpReferenceUsage>()
+        var index = contentStart
+        var previousSignificantChar: Char? = null
+        while (index < contentEnd) {
+            val c = text[index]
+            when {
+                c.isWhitespace() -> index++
+                c == '"' || c == '\'' || c == '`' -> index = skipQuotedJsString(index, contentEnd, c)
+                c == '/' && index + 1 < contentEnd && text[index + 1] == '/' -> {
+                    index += 2
+                    while (index < contentEnd && text[index] != '\n' && text[index] != '\r') index++
+                }
+                c == '/' && index + 1 < contentEnd && text[index + 1] == '*' -> {
+                    index += 2
+                    while (index < contentEnd - 1 && !(text[index] == '*' && text[index + 1] == '/')) index++
+                    index = (index + 2).coerceAtMost(contentEnd)
+                }
+                isJsIdentifierStart(c) -> {
+                    val start = index
+                    index++
+                    while (index < contentEnd && isJsIdentifierPart(text[index])) index++
+                    val name = text.substring(start, index)
+                    val next = nextNonWhitespaceChar(index, contentEnd)
+                    if (previousSignificantChar != '.' && name !in JS_RESERVED_WORDS) {
+                        val kind = when {
+                            next == '(' && name in functionDeclarations -> XcpReferenceKind.FUNCTION
+                            next != '(' && name in variableDeclarations -> XcpReferenceKind.VARIABLE
+                            else -> null
+                        }
+                        if (kind != null) {
+                            result += XcpReferenceUsage(kind, name, TextRange(start, index))
+                        }
+                    }
+                    previousSignificantChar = null
+                }
+                else -> {
+                    previousSignificantChar = if (c.isWhitespace()) previousSignificantChar else c
+                    index++
+                }
+            }
+        }
+        return result
     }
 
     private fun formItemVariableUsage(token: XcpTokenInfo, tokenIndex: Int): XcpReferenceUsage? {
+        if (token.type != XcpTokenTypes.STRING) return null
         if (!isInsidePropertyArray(tokenIndex, "items")) return null
         val raw = token.unquotedText(text)
-        val name = raw.substringBefore(':').substringBefore('(').trim()
-        if (name.isEmpty()) return null
+        val prefix = raw.substringBefore(':').substringBefore('(')
+        val name = prefix.trim()
+        if (name.isEmpty() || name !in variableDeclarations) return null
+        val nameStart = token.start + 1 + prefix.indexOf(name)
         return XcpReferenceUsage(
             XcpReferenceKind.VARIABLE,
             name,
-            TextRange(token.start + 1, token.start + 1 + name.length)
+            TextRange(nameStart, nameStart + name.length)
         )
     }
 
@@ -128,7 +272,7 @@ private data class XcpStructure(
         return XcpReferenceUsage(
             kind,
             token.unquotedText(text),
-            TextRange(token.start + 1, token.end - 1)
+            token.contentRange()
         )
     }
 
@@ -138,6 +282,10 @@ private data class XcpStructure(
 
     private fun isPhaseDeclaration(tokenIndex: Int): Boolean {
         return isDeclarationInTopLevelArray(tokenIndex, "phases")
+    }
+
+    private fun isFunctionDeclaration(tokenIndex: Int): Boolean {
+        return tokens.getOrNull(tokenIndex)?.type == XcpTokenTypes.JS_FUNCTION_DECLARATION
     }
 
     private fun isDeclarationInTopLevelArray(tokenIndex: Int, arrayKey: String): Boolean {
@@ -162,6 +310,62 @@ private data class XcpStructure(
             if (tokenIndex in range && tokens.getOrNull(i + 2)?.type == XcpTokenTypes.L_BRACKET) return true
         }
         return false
+    }
+
+    private fun isSetVariablesInputKey(tokenIndex: Int): Boolean {
+        val token = tokens.getOrNull(tokenIndex) ?: return false
+        if (!token.isNameToken() || tokens.getOrNull(tokenIndex + 1)?.type != XcpTokenTypes.COLON) return false
+        val inputsProperty = propertyValueRangeContainingToken(tokenIndex, "inputs") ?: return false
+        if (relativeDepthAt(inputsProperty.valueRange.first, tokenIndex) != 1) return false
+        val stepRange = objectRangeContaining(inputsProperty.keyIndex) ?: return false
+        return objectHasStringProperty(stepRange, "action", "setVariables")
+    }
+
+    private fun propertyValueRangeContainingToken(tokenIndex: Int, propertyKey: String): XcpPropertyValueRange? {
+        for (i in tokens.indices) {
+            val token = tokens[i]
+            if (!token.isNameToken() || token.unquotedText(text) != propertyKey || tokens.getOrNull(i + 1)?.type != XcpTokenTypes.COLON) {
+                continue
+            }
+            val range = balancedValueRange(i + 2) ?: continue
+            if (tokenIndex in range) return XcpPropertyValueRange(i, range)
+        }
+        return null
+    }
+
+    private fun objectHasStringProperty(objectRange: IntRange, key: String, value: String): Boolean {
+        var depth = 0
+        for (i in objectRange) {
+            val token = tokens.getOrNull(i) ?: continue
+            when (token.type) {
+                XcpTokenTypes.L_BRACE, XcpTokenTypes.L_BRACKET -> depth++
+                XcpTokenTypes.R_BRACE, XcpTokenTypes.R_BRACKET -> depth--
+                else -> if (depth == 1 &&
+                    token.isNameToken() &&
+                    token.unquotedText(text) == key &&
+                    tokens.getOrNull(i + 1)?.type == XcpTokenTypes.COLON
+                ) {
+                    val valueToken = tokens.getOrNull(i + 2)
+                    if (valueToken?.type == XcpTokenTypes.STRING && valueToken.unquotedText(text) == value) return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun objectRangeContaining(tokenIndex: Int): IntRange? {
+        var depth = 0
+        for (i in tokenIndex downTo 0) {
+            when (tokens[i].type) {
+                XcpTokenTypes.R_BRACE, XcpTokenTypes.R_BRACKET -> depth++
+                XcpTokenTypes.L_BRACE -> {
+                    if (depth == 0) return balancedValueRange(i)
+                    depth--
+                }
+                XcpTokenTypes.L_BRACKET -> depth--
+            }
+        }
+        return null
     }
 
     private fun previousKeyName(tokenIndex: Int): String? {
@@ -217,6 +421,29 @@ private data class XcpStructure(
         return depth
     }
 
+    private fun skipQuotedJsString(start: Int, end: Int, quote: Char): Int {
+        var index = start + 1
+        var escaped = false
+        while (index < end) {
+            val c = text[index]
+            if (escaped) {
+                escaped = false
+            } else if (c == '\\') {
+                escaped = true
+            } else if (c == quote) {
+                return index + 1
+            }
+            index++
+        }
+        return end
+    }
+
+    private fun nextNonWhitespaceChar(start: Int, end: Int): Char? {
+        var index = start
+        while (index < end && text[index].isWhitespace()) index++
+        return if (index < end) text[index] else null
+    }
+
     companion object {
         fun from(text: String): XcpStructure {
             val tokens = scanTokens(text).filter {
@@ -226,10 +453,11 @@ private data class XcpStructure(
                     it.type != XcpTokenTypes.JS_LINE_COMMENT &&
                     it.type != XcpTokenTypes.JS_BLOCK_COMMENT
             }
-            val structure = XcpStructure(text, tokens, emptyMap(), emptyMap())
+            val structure = XcpStructure(text, tokens, emptyMap(), emptyMap(), emptyMap())
             return structure.copy(
                 variableDeclarations = structure.collectDeclarations("variables"),
-                phaseDeclarations = structure.collectDeclarations("phases")
+                phaseDeclarations = structure.collectDeclarations("phases"),
+                functionDeclarations = structure.collectFunctionDeclarations()
             )
         }
 
@@ -244,6 +472,13 @@ private data class XcpStructure(
             }
             return result
         }
+
+        private val JS_RESERVED_WORDS = setOf(
+            "break", "case", "catch", "const", "continue", "debugger", "default", "delete", "do", "else",
+            "false", "finally", "for", "function", "if", "in", "instanceof", "let", "new", "null", "return",
+            "switch", "this", "throw", "true", "try", "typeof", "undefined", "var", "void", "while", "with",
+            "yield"
+        )
     }
 
     private fun collectDeclarations(arrayKey: String): Map<String, XcpDeclaration> {
@@ -258,9 +493,29 @@ private data class XcpStructure(
         }
         return result
     }
+
+    private fun collectFunctionDeclarations(): Map<String, XcpDeclaration> {
+        val result = linkedMapOf<String, XcpDeclaration>()
+        for (token in tokens) {
+            if (token.type == XcpTokenTypes.JS_FUNCTION_DECLARATION) {
+                val name = token.unquotedText(text)
+                result[name] = XcpDeclaration(name, token.start, token.end)
+            }
+        }
+        return result
+    }
+
+    private fun isJsIdentifierStart(c: Char): Boolean = c == '_' || c == '$' || Character.isLetter(c)
+
+    private fun isJsIdentifierPart(c: Char): Boolean = isJsIdentifierStart(c) || Character.isDigit(c)
 }
 
-private data class XcpTokenInfo(
+private data class XcpPropertyValueRange(
+    val keyIndex: Int,
+    val valueRange: IntRange
+)
+
+data class XcpTokenInfo(
     val type: com.intellij.psi.tree.IElementType,
     val start: Int,
     val end: Int
@@ -272,5 +527,13 @@ private data class XcpTokenInfo(
 
     fun isNameToken(): Boolean {
         return type == XcpTokenTypes.IDENTIFIER || type == XcpTokenTypes.KEYWORD || type == XcpTokenTypes.STRING
+    }
+
+    fun contentRange(): TextRange {
+        return if (type == XcpTokenTypes.STRING && end - start >= 2) {
+            TextRange(start + 1, end - 1)
+        } else {
+            TextRange(start, end)
+        }
     }
 }

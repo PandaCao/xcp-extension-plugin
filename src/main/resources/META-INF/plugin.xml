@@ -40,6 +40,11 @@
                         implementationClass="org.dotykacka.xcp.XcpCommenter"/>
         <lang.braceMatcher language="XCP"
                            implementationClass="org.dotykacka.xcp.XcpBraceMatcher"/>
+        <lang.findUsagesProvider language="XCP"
+                                 implementationClass="org.dotykacka.xcp.XcpFindUsagesProvider"/>
+        <findUsagesHandlerFactory implementationClass="org.dotykacka.xcp.XcpFindUsagesHandlerFactory"/>
+        <highlightUsagesHandlerFactory implementationClass="org.dotykacka.xcp.XcpHighlightUsagesHandlerFactory"/>
+        <gotoDeclarationHandler implementationClass="org.dotykacka.xcp.XcpGotoDeclarationHandler"/>
         <annotator language="XCP"
                    implementationClass="org.dotykacka.xcp.XcpAnnotator"/>
         <localInspection language="XCP"
@@ -52,7 +57,7 @@
         <completion.contributor language="XCP"
                                 implementationClass="org.dotykacka.xcp.XcpCompletionContributor"/>
         <psi.referenceContributor language="XCP"
-                                  implementationClass="org.dotykacka.xcp.XcpReferenceContributor"/>
+                                  implementation="org.dotykacka.xcp.XcpReferenceContributor"/>
     </extensions>
 
 </idea-plugin>

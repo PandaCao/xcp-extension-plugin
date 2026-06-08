@@ -11,6 +11,8 @@ class XcpFile(viewProvider: FileViewProvider) : PsiFileBase(viewProvider, XcpLan
 
     override fun findReferenceAt(offset: Int): PsiReference? {
         val element = findElementAt(offset) ?: return null
-        return XcpReferenceFactory.create(element)
+        return XcpReferenceFactory.createAll(element).firstOrNull { reference ->
+            reference.rangeInElement.shiftRight(element.textRange.startOffset).containsOffset(offset)
+        }
     }
 }
