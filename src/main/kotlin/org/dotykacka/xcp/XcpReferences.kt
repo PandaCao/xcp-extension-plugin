@@ -307,7 +307,10 @@ data class XcpStructure(
                 continue
             }
             val range = balancedValueRange(i + 2) ?: continue
-            if (tokenIndex in range && tokens.getOrNull(i + 2)?.type == XcpTokenTypes.L_BRACKET) return true
+            if (tokenIndex in range &&
+                tokens.getOrNull(i + 2)?.type == XcpTokenTypes.L_BRACKET &&
+                relativeDepthAt(range.first, tokenIndex) == 1
+            ) return true
         }
         return false
     }
