@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-17
+
+### Changed
+- Updated plugin Marketplace icon
+- Added dedicated `.xcp` file icon
+- Added configurable JetBrains Marketplace publishing settings
+
 ## [1.0.0] - 2026-06-08
 
 ### Added
