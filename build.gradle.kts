@@ -26,4 +26,22 @@ intellijPlatform {
             untilBuild = provider { null }
         }
     }
+
+    publishing {
+        host = providers.gradleProperty("pluginMarketplaceHost")
+            .orElse(providers.environmentVariable("PLUGIN_MARKETPLACE_HOST"))
+            .orElse("https://plugins.jetbrains.com")
+        channels = providers.gradleProperty("pluginMarketplaceChannels")
+            .orElse(providers.environmentVariable("PLUGIN_MARKETPLACE_CHANNELS"))
+            .map { value ->
+                value.split(',')
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+            }
+            .orElse(listOf("default"))
+        hidden = providers.gradleProperty("pluginMarketplaceHidden")
+            .orElse(providers.environmentVariable("PLUGIN_MARKETPLACE_HIDDEN"))
+            .map(String::toBoolean)
+            .orElse(false)
+    }
 }
